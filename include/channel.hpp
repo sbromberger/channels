@@ -10,7 +10,7 @@
 #define RECV_CLOSED_ERR 3
 #define CLOSE_CLOSED_ERR 4
 
-template <typename T> struct channel {
+template <typename T> class channel {
   size_t cap{};
   std::mutex mu{};
   std::condition_variable _full{};

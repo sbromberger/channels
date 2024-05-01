@@ -13,7 +13,8 @@
 template <typename T> struct channel {
   size_t cap{};
   std::mutex mu{};
-  std::condition_variable cv{};
+  std::condition_variable _full{};
+  std::condition_variable _empty{};
   std::queue<T> q{};
   bool _closed = false;
 
@@ -63,7 +64,7 @@ public:
     check_closed("Attempt to close a closed channel", CLOSE_CLOSED_ERR);
     _closed = true;
     std::swap(q, empty_q);
-    cv.notify_one();
+    _full.notify_one();
   }
 
   void flush() {
@@ -71,7 +72,7 @@ public:
     while (!q.empty()) {
       q.pop();
     }
-    cv.notify_one();
+    _full.notify_one();
   }
 
   /**
@@ -86,12 +87,12 @@ public:
     if (_closed) {
       return false;
     }
-    cv.wait(l, [this] { return _closed || (cap == 0 || q.size() < cap); });
+    _full.wait(l, [this] { return _closed || (cap == 0 || q.size() < cap); });
     if (_closed) {
       return false;
     }
     q.push(std::move(t));
-    cv.notify_one();
+    _empty.notify_one();
     return true;
   }
 
@@ -115,7 +116,7 @@ public:
     }
     T t = std::move(q.front());
     q.pop();
-    cv.notify_one();
+    _full.notify_one();
 
     return t;
   }
@@ -133,11 +134,11 @@ public:
 
     // Wait until the queue is not empty.
     std::unique_lock l(mu);
-    cv.wait(l, [this] { return _closed || !q.empty(); });
+    _empty.wait(l, [this] { return _closed || !q.empty(); });
     check_closed("Attempt to receive on a closed channel", RECV_CLOSED_ERR);
     T t = std::move(q.front());
     q.pop();
-    cv.notify_one();
+    _full.notify_one();
     return t;
   }
 };

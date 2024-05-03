@@ -1,16 +1,20 @@
 #pragma once
 #include <condition_variable>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
 #include <string>
 
-#define SEND_CLOSED_ERR 2
-#define RECV_CLOSED_ERR 3
-#define CLOSE_CLOSED_ERR 4
+namespace channel {
+constexpr int SEND_CLOSED_ERR = 2;
+constexpr int RECV_CLOSED_ERR = 3;
+constexpr int CLOSE_CLOSED_ERR = 4;
 
-template <typename T> class channel {
+template <typename T> class channel;
+template <typename T> class _channel {
+  friend class channel<T>;
   size_t cap{};
   std::mutex mu{};
   std::condition_variable _full{};
@@ -39,12 +43,27 @@ template <typename T> class channel {
   }
 
 public:
-  channel(size_t cap) : cap(cap){};
+  _channel(size_t cap) : cap(cap){};
   /**
    * @brief Checks if the channel is closed.
    *
    * @return true if the channel is closed, false otherwise.
    */
+
+  ~_channel() {
+    if (!closed()) {
+      close();
+    }
+    flush();
+  }
+  void flush() {
+    std::scoped_lock _(mu);
+    while (!q.empty()) {
+      q.pop();
+    }
+    _full.notify_one();
+  }
+
   bool closed() {
     std::scoped_lock _(mu);
     return _closed;
@@ -64,15 +83,8 @@ public:
     check_closed("Attempt to close a closed channel", CLOSE_CLOSED_ERR);
     _closed = true;
     std::swap(q, empty_q);
-    _full.notify_one();
-  }
-
-  void flush() {
-    std::scoped_lock _(mu);
-    while (!q.empty()) {
-      q.pop();
-    }
-    _full.notify_one();
+    _full.notify_all();
+    _empty.notify_all();
   }
 
   /**
@@ -96,8 +108,8 @@ public:
     return true;
   }
 
-  friend void operator>>(T &&t, channel<T> &ch) { ch.send(std::move(t)); }
-  friend void operator<<(T &t, channel<T> &ch) { t = ch.recv(); }
+  friend void operator>>(T &&t, _channel<T> &ch) { ch.send(std::move(t)); }
+  friend void operator<<(T &t, _channel<T> &ch) { t = ch.recv(); }
   /**
    * @brief Receives an item from the channel immediately.
    *
@@ -142,3 +154,29 @@ public:
     return t;
   }
 };
+
+template <typename T> class channel {
+  std::shared_ptr<_channel<T>> ch;
+
+public:
+  channel(size_t cap) : ch(std::make_shared<_channel<T>>(cap)){};
+  ~channel() {
+    if (!closed()) {
+      ch->close();
+    }
+  }
+  bool send(T t) { return ch->send(std::move(t)); }
+  std::optional<T> recv_immed() { return ch->recv_immed().value(); }
+  T recv() { return ch->recv(); }
+  bool closed() { return ch->closed(); }
+  void close() {
+    if (!closed()) {
+      ch->close();
+    }
+    ch->flush();
+  }
+  friend void operator>>(T &&t, channel<T> &ch) { ch.send(std::move(t)); }
+  friend void operator<<(T &t, channel<T> &ch) { t = ch.recv(); }
+};
+
+} // namespace channel

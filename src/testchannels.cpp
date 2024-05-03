@@ -3,7 +3,7 @@
 #include <thread>
 #include <unistd.h>
 
-void helper(channel<int> &ch) {
+void helper(channel::channel<int> &ch) {
   thread_local int i = 0;
   bool closed = ch.closed();
   while (!closed) {
@@ -15,12 +15,12 @@ void helper(channel<int> &ch) {
 }
 int main() {
 
-  channel<int> ch{1};
+  auto ch = channel::channel<int>(5);
 
   std::thread mythread(helper, std::ref(ch));
   int r{};
   for (int i = 0; i < 10; ++i) {
-    r << ch;
+    r = ch.recv();
     std::cout << "Main received " << r << "\n";
   }
 
@@ -34,6 +34,5 @@ int main() {
   // }
 
   mythread.join();
-  ch.flush();
   std::cout << "Done!\n";
 }

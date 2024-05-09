@@ -155,6 +155,20 @@ public:
   }
 };
 
+template <typename T> class _send_channel : public _channel<T> {
+
+public:
+  T recv() = delete;
+  std::optional<T> recv_immed() = delete;
+  friend void operator<<(T &t, _channel<T> &ch) = delete;
+};
+
+template <typename T> class _recv_channel : public _channel<T> {
+public:
+  bool send(T t) = delete;
+  friend void operator>>(T &&t, _channel<T> &ch) = delete;
+};
+
 template <typename T> class channel {
   std::shared_ptr<_channel<T>> ch;
 
@@ -165,6 +179,7 @@ public:
       ch->close();
     }
   }
+
   bool send(T t) { return ch->send(std::move(t)); }
   std::optional<T> recv_immed() { return ch->recv_immed().value(); }
   T recv() { return ch->recv(); }

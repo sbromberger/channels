@@ -169,10 +169,37 @@ public:
   friend void operator>>(T &&t, _channel<T> &ch) = delete;
 };
 
+template <typename T> class send_channel {
+  std::shared_ptr<_channel<T>> ch;
+  
+  public:
+  send_channel(size_t cap) : ch(std::make_shared<_channel<T>>(cap)){};
+
+  template <typename U>
+  send_channel(const channel<U> &c) : ch(c.ch) {};
+  ~send_channel() {
+    if (!closed()) {
+      ch->close();
+    }
+  }
+
+  bool send(T t) { return ch->send(std::move(t)); }
+  bool closed() { return ch->closed(); }
+  void close() {
+    if (!closed()) {
+      ch->close();
+    }
+    ch->flush();
+  }
+  friend void operator>>(T &&t, send_channel<T> &ch) { ch.send(std::move(t)); }
+};
+
 template <typename T> class channel {
   std::shared_ptr<_channel<T>> ch;
 
 public:
+  friend class send_channel<T>;
+
   channel(size_t cap) : ch(std::make_shared<_channel<T>>(cap)){};
   ~channel() {
     if (!closed()) {

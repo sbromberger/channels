@@ -12,6 +12,7 @@ void helper(channel::channel<int> &ch) {
     i += 2;
   }
   std::cout << "Helper: channel closed; exiting\n";
+  std::cout << "Helper: queue size now " << ch.size() << "\n";
 }
 int main() {
 
@@ -21,10 +22,11 @@ int main() {
   int r{};
   for (int i = 0; i < 10; ++i) {
     r = ch.recv();
-    std::cout << "Main received " << r << "\n";
+    std::cout << "Main received " << r << "; size now " << ch.size() << "\n";
   }
 
   std::cout << "Main closing channel\n";
+  std::cout << "Main size now " << ch.size() << "\n";
   ch.close();
 
   // std::optional<int> last = ch.recv_immed();

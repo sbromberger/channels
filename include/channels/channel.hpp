@@ -7,7 +7,6 @@
 
 namespace channel {
 
-constexpr int SEND_CLOSED_ERR = 2;
 constexpr int RECV_CLOSED_ERR = 3;
 constexpr int CLOSE_CLOSED_ERR = 4;
 
@@ -17,9 +16,8 @@ public:
 };
 
 static const std::unordered_map<int, std::string> errs = {
-    {SEND_CLOSED_ERR, "Attempt to send on closed channel"},
     {RECV_CLOSED_ERR, "Attempt to receive on closed channel"},
-    {RECV_CLOSED_ERR, "Attempt to close a previously-closed channel"},
+    {CLOSE_CLOSED_ERR, "Attempt to close a previously-closed channel"},
 };
 
 template <typename T> struct buffer {
@@ -81,7 +79,7 @@ template <typename T> struct buffer {
     }
     _closed = true;
     _waiting_to_send.notify_all();
-    _waiting_to_receive.notify_one();
+    _waiting_to_receive.notify_all();
   }
 
   bool send(T el) {
@@ -92,34 +90,35 @@ template <typename T> struct buffer {
       return false;
     }
 
-    q.push(el);
-    _waiting_to_receive.notify_one();
+    q.push(std::move(el));
+    _waiting_to_receive.notify_all();
     return true;
   }
 
   T recv() {
     std::unique_lock l(mu);
     _waiting_to_receive.wait(l, [this] { return _closed || !q.empty(); });
-    if (_closed && q.empty()) {
-      throw ChannelClosedException(errs.at(RECV_CLOSED_ERR));
+    if (q.finished()) {
+      throw ChannelClosedException(
+          "Attempt to receive on a closed empty channel");
     }
     T t = std::move(q.front());
     q.pop();
     if (!_closed) {
-      _waiting_to_send.notify_one();
+      _waiting_to_send.notify_all();
     }
     return t;
   }
 
-  std::optional<T> recv_immed() {
+  std::optional<T> try_recv() {
     std::unique_lock _(mu);
-    if (_closed && q.empty()) {
+    if (q.empty()) {
       return {};
     }
     T t = std::move(q.front());
     q.pop();
     if (!_closed) {
-      _waiting_to_send.notify_one();
+      _waiting_to_send.notify_all();
     }
     return t;
   }
@@ -137,9 +136,8 @@ public:
 
   friend void operator>>(T &&t, channel<T> &ch) { ch.send(std::move(t)); }
   bool send(T el) { return buf_p->send(el); }
-
   T recv() { return buf_p->recv(); }
-  std::optional<T> recv_immed() { return buf_p->recv_immed(); }
+  std::optional<T> try_recv() { return buf_p->try_recv(); }
   friend void operator<<(T &t, channel<T> &ch) { t = ch.recv(); }
   void close() { buf_p->close(); }
   // we can make these const even though buf_p->closed() cannot be due to the
@@ -167,7 +165,11 @@ public:
   // refct.
   // send_channel(channel<T> ch) : buf_p(std::move(ch.buf_p)){};
   friend void operator>>(T &&t, send_channel<T> &ch) { ch.send(std::move(t)); }
-  bool send(T el) { return buf_p->send(el); }
+  friend void operator>>(const T &t, send_channel<T> &ch) { ch.send(t); }
+  // TODO: what is the proper way to do send?
+  // do we need a T &&el as well for temporary variables?
+  bool send(T el) { return buf_p->send(std::move(el)); }
+  bool send(T &&el) { return buf_p->send(std::move(el)); }
   void close() { buf_p->close(); }
   [[nodiscard]] bool closed() const { return buf_p->closed(); }
   [[nodiscard]] bool finished() const { return buf_p->finished(); }
@@ -183,7 +185,7 @@ public:
   // recv_channel(channel<T> ch) : buf_p(std::move(ch.buf_p)){};
   friend void operator<<(T &t, recv_channel<T> &ch) { t = ch.recv(); }
   T recv() { return buf_p->recv(); }
-  std::optional<T> recv_immed() { return buf_p->recv_immed(); }
+  std::optional<T> recv_immed() { return buf_p->try_recv(); }
   void close() { buf_p->close(); }
   [[nodiscard]] bool closed() const { return buf_p->closed(); }
   [[nodiscard]] bool finished() const { return buf_p->finished(); }

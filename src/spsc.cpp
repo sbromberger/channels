@@ -1,9 +1,9 @@
-#include "channel.hpp"
+#include <channels/channel.hpp>
 #include <iostream>
 #include <unistd.h>
 
 // this helper provides an infinite series of integers to a channel.
-void helper(channel::send_channel<int> &ch, int start, int step) {
+void producer(channel::send_channel<int> &ch, int start, int step) {
   thread_local int i = start;
   // send returns false when channel is closed & blocks if channel is full.
   while (ch.send(i)) {
@@ -12,12 +12,13 @@ void helper(channel::send_channel<int> &ch, int start, int step) {
   std::cout << "Helper: channel closed; exiting\n";
   std::cout << "Helper: queue size now " << ch.size() << "\n";
 }
+
 int main() {
 
   auto ch = channel::channel<int>(3);
   auto [sch, rch] = ch.split();
 
-  std::thread mythread([&] { helper(sch, 1, 2); });
+  std::thread mythread([&] { producer(sch, 1, 2); });
   int r{};
   for (int i = 0; i < 10; ++i) {
     r = rch.recv();

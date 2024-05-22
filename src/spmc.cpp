@@ -1,10 +1,10 @@
-#include "channel.hpp"
+#include <channels/channel.hpp>
 #include <iostream>
 #include <string>
 #include <thread>
 
 // this helper consumes integers until the producer closes.
-void helper(channel::recv_channel<int> &ch, const std::string &id) {
+void consumer(channel::recv_channel<int> &ch, const std::string &id) {
   std::cout << "Helper " << id << " starting" << std::endl;
   while (!ch.finished()) {
     auto r = ch.recv();
@@ -19,9 +19,9 @@ int main() {
   auto ch = channel::channel<int>(3);
   auto [sch, rch] = ch.split();
 
-  std::thread mythread1([&] { helper(rch, "consumer 1"); });
-  std::thread mythread2([&] { helper(rch, "consumer 2"); });
-  std::thread mythread3([&] { helper(rch, "consumer 3"); });
+  std::thread mythread1([&] { consumer(rch, "consumer 1"); });
+  std::thread mythread2([&] { consumer(rch, "consumer 2"); });
+  std::thread mythread3([&] { consumer(rch, "consumer 3"); });
 
   std::this_thread::sleep_for(2000ms);
   bool s{true};

@@ -1,4 +1,4 @@
-#include "channel.hpp"
+#include <channels/channel.hpp>
 #include <chrono>
 #include <iostream>
 #include <random>
@@ -7,8 +7,8 @@
 #include <unistd.h>
 
 // this helper provides an infinite series of integers to a channel.
-void helper(channel::send_channel<int> &ch, const std::string &id, int start,
-            int step) {
+void producer(channel::send_channel<int> &ch, const std::string &id, int start,
+              int step) {
   std::cout << "Helper " << id << " starting\n";
   thread_local std::random_device rd;
   thread_local std::mt19937 gen(rd());
@@ -28,9 +28,9 @@ int main() {
   auto ch = channel::channel<int>(3);
   auto [sch, rch] = ch.split();
 
-  std::thread mythread1([&] { helper(sch, "producer 1", 0, 3); });
-  std::thread mythread2([&] { helper(sch, "producer 2", 1, 3); });
-  std::thread mythread3([&] { helper(sch, "producer 3", 2, 3); });
+  std::thread mythread1([&] { producer(sch, "producer 1", 0, 3); });
+  std::thread mythread2([&] { producer(sch, "producer 2", 1, 3); });
+  std::thread mythread3([&] { producer(sch, "producer 3", 2, 3); });
   int r{};
   for (int i = 0; i < 10; ++i) {
     r = rch.recv();

@@ -1,136 +1,200 @@
 #pragma once
 #include <condition_variable>
-#include <iostream>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
-#include <string>
+#include <unordered_map>
 
 namespace channel {
+
 constexpr int SEND_CLOSED_ERR = 2;
 constexpr int RECV_CLOSED_ERR = 3;
 constexpr int CLOSE_CLOSED_ERR = 4;
 
-// template <typename T> class channel;
-template <typename T> class channel {
-  // friend class channel<T>;
-  size_t cap{};
+class ChannelClosedException : public std::runtime_error {
+public:
+  ChannelClosedException(const std::string &msg) : std::runtime_error(msg){};
+};
+
+static const std::unordered_map<int, std::string> errs = {
+    {SEND_CLOSED_ERR, "Attempt to send on closed channel"},
+    {RECV_CLOSED_ERR, "Attempt to receive on closed channel"},
+    {RECV_CLOSED_ERR, "Attempt to close a previously-closed channel"},
+};
+
+template <typename T> struct buffer {
+  size_t cap{}; // if the capacity is set to zero, unlimited capacity.
   std::mutex mu{};
-  std::condition_variable _full{};
-  std::condition_variable _empty{};
+  std::condition_variable _waiting_to_send{};
+  std::condition_variable _waiting_to_receive{};
   std::queue<T> q{};
   bool _closed = false;
 
-  void check_closed(const std::string &msg, int exit_code = 1) {
-    if (_closed) {
-      std::cerr << msg << '\n';
-      exit(exit_code);
-    }
-  }
+  // constructor
+  explicit buffer(size_t cap) : cap(cap){};
+  buffer(const buffer &) = delete;
+  void operator=(const buffer &) = delete;
 
-public:
-  channel(size_t cap) : cap(cap){};
-  ~channel() {
-    if (!closed()) {
-      close();
-    }
-    flush();
-  }
-  // channels cannot be copied.
-  channel(const channel &) = delete;
-  void operator=(const channel &) = delete;
-
-  void flush() {
-    std::scoped_lock _(mu);
-    while (!q.empty()) {
-      q.pop();
-    }
-    _full.notify_one();
-  }
-
-  bool closed() {
-    std::scoped_lock _(mu);
-    return _closed;
-  }
-
+  // reports the number of elements in the channel.
   size_t size() {
-    std::scoped_lock _(mu);
+    std::unique_lock _(mu);
     return q.size();
   }
 
-  void close() {
-    std::queue<T> empty_q{};
-    std::scoped_lock _(mu);
-    check_closed("Attempt to close a closed channel", CLOSE_CLOSED_ERR);
-    _closed = true;
-    std::swap(q, empty_q);
-    _full.notify_all();
-    _empty.notify_one();
+  bool empty() {
+    std::unique_lock _(mu);
+    return q.empty();
   }
 
-  bool send(T t) {
+  /**
+   * @brief Checks if the channel is closed and empty.
+   *
+   * @return true if the channel is closed and empty, false otherwise.
+   */
+  bool finished() {
+    std::unique_lock _(mu);
+    return _closed && q.empty();
+  }
+
+  /**
+   * @brief Checks if the channel is closed.
+   *
+   * @return true if the channel is closed, false otherwise.
+   */
+  bool closed() {
+    std::unique_lock _(mu);
+    return _closed;
+  }
+
+  /**
+   * @brief Closes the channel.
+   *
+   * This function closes the channel. Elements in the channel are
+   * not discarded and can be subsequently received.
+   *
+   * @exits with ChannelClosedException if the channel is already closed.
+   */
+  void close() {
+    std::unique_lock _(mu);
+    if (_closed) {
+      throw ChannelClosedException(errs.at(CLOSE_CLOSED_ERR));
+    }
+    _closed = true;
+    _waiting_to_send.notify_all();
+    _waiting_to_receive.notify_one();
+  }
+
+  bool send(T el) {
     std::unique_lock l(mu);
+    _waiting_to_send.wait(
+        l, [this] { return _closed || (cap == 0 || q.size() < cap); });
     if (_closed) {
       return false;
     }
-    _full.wait(l, [this] { return _closed || (cap == 0 || q.size() < cap); });
-    if (_closed) {
-      return false;
-    }
-    q.push(std::move(t));
-    _empty.notify_one();
+
+    q.push(el);
+    _waiting_to_receive.notify_one();
     return true;
   }
 
-  friend void operator>>(T &&t, channel<T> &ch) { ch.send(std::move(t)); }
-  friend void operator<<(T &t, channel<T> &ch) { t = ch.recv(); }
+  T recv() {
+    std::unique_lock l(mu);
+    _waiting_to_receive.wait(l, [this] { return _closed || !q.empty(); });
+    if (_closed && q.empty()) {
+      throw ChannelClosedException(errs.at(RECV_CLOSED_ERR));
+    }
+    T t = std::move(q.front());
+    q.pop();
+    if (!_closed) {
+      _waiting_to_send.notify_one();
+    }
+    return t;
+  }
 
   std::optional<T> recv_immed() {
-    std::scoped_lock _(mu);
-    if (q.empty()) {
+    std::unique_lock _(mu);
+    if (_closed && q.empty()) {
       return {};
     }
     T t = std::move(q.front());
     q.pop();
-    _full.notify_one();
-
-    return t;
-  }
-
-  T recv() {
-    // Check if the channel is closed. If it is, throw an exception.
-    check_closed("Attempt to receive on a closed channel", RECV_CLOSED_ERR);
-
-    // Wait until the queue is not empty.
-    std::unique_lock l(mu);
-    _empty.wait(l, [this] { return _closed || !q.empty(); });
-    check_closed("Attempt to receive on a closed channel", RECV_CLOSED_ERR);
-    T t = std::move(q.front());
-    q.pop();
-    _full.notify_one();
+    if (!_closed) {
+      _waiting_to_send.notify_one();
+    }
     return t;
   }
 };
 
-// template <typename T, typename Fn> struct channel_group {
-//   std::condition_variable _switched{};
-//   std::map<channel<T>, Fn> group;
+template <class> class send_channel;
+template <class> class recv_channel;
 
-// public:
-//   channel_group() = default;
-//   void add_channel(channel<T> &ch, const Fn &fn) {
-//     group.emplace_back(std::move(ch), fn);
-//   };
-//   channel<T> pop_channel() {
-//     channel<T> ch = group.begin().first;
-//     group.erase(ch);
-//     return ch;
-//   };
+template <typename T> class channel {
+  std::shared_ptr<buffer<T>> buf_p;
 
-//   void wait_on() {
+public:
+  friend class send_channel<T>;
+  friend class recv_channel<T>;
 
-// }
-// };
+  friend void operator>>(T &&t, channel<T> &ch) { ch.send(std::move(t)); }
+  bool send(T el) { return buf_p->send(el); }
+
+  T recv() { return buf_p->recv(); }
+  std::optional<T> recv_immed() { return buf_p->recv_immed(); }
+  friend void operator<<(T &t, channel<T> &ch) { t = ch.recv(); }
+  void close() { buf_p->close(); }
+  // we can make these const even though buf_p->closed() cannot be due to the
+  // mutex.
+  [[nodiscard]] bool closed() const { return buf_p->closed(); }
+  [[nodiscard]] size_t size() const { return buf_p->size(); }
+  [[nodiscard]] bool finished() const { return buf_p->finished(); }
+  [[nodiscard]] bool empty() const { return buf_p->empty(); }
+
+  std::pair<send_channel<T>, recv_channel<T>> split() const {
+    return std::make_pair(*this, *this);
+  }
+
+  // constructor
+  explicit channel(size_t cap) : buf_p(std::make_shared<buffer<T>>(cap)) {}
+};
+
+template <typename T> class send_channel {
+  std::shared_ptr<buffer<T>> buf_p;
+
+public:
+  // let's make the copy internally so the user doesn't have to do it.
+  send_channel(const channel<T> &ch) : buf_p(ch.buf_p){};
+  // we move here because in split, we pass a copy which already increases the
+  // refct.
+  // send_channel(channel<T> ch) : buf_p(std::move(ch.buf_p)){};
+  friend void operator>>(T &&t, send_channel<T> &ch) { ch.send(std::move(t)); }
+  bool send(T el) { return buf_p->send(el); }
+  void close() { buf_p->close(); }
+  [[nodiscard]] bool closed() const { return buf_p->closed(); }
+  [[nodiscard]] bool finished() const { return buf_p->finished(); }
+  [[nodiscard]] size_t size() const { return buf_p->size(); }
+  [[nodiscard]] bool empty() const { return buf_p->empty(); }
+};
+
+template <typename T> class recv_channel {
+  std::shared_ptr<buffer<T>> buf_p;
+
+public:
+  recv_channel(const channel<T> &ch) : buf_p(ch.buf_p){};
+  // recv_channel(channel<T> ch) : buf_p(std::move(ch.buf_p)){};
+  friend void operator<<(T &t, recv_channel<T> &ch) { t = ch.recv(); }
+  T recv() { return buf_p->recv(); }
+  std::optional<T> recv_immed() { return buf_p->recv_immed(); }
+  void close() { buf_p->close(); }
+  [[nodiscard]] bool closed() const { return buf_p->closed(); }
+  [[nodiscard]] bool finished() const { return buf_p->finished(); }
+  [[nodiscard]] size_t size() const { return buf_p->size(); }
+  [[nodiscard]] bool empty() const { return buf_p->empty(); }
+};
+
+template <typename T>
+static std::pair<send_channel<T>, recv_channel<T>> channels(size_t cap) {
+  auto c = channel<T>(cap);
+  return c.split();
+}
 
 } // namespace channel

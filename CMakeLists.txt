@@ -18,13 +18,10 @@ if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
 endif()
 
 include(FetchContent)
-FetchContent_Declare(
-  concurrentqueue
-  URL https://github.com/cameron314/concurrentqueue/archive/refs/tags/v1.0.4.tar.gz
-)
-FetchContent_MakeAvailable(concurrentqueue)
 include_directories(include/)
 
-add_executable(testchannels src/testchannels.cpp)
-target_link_libraries(testchannels PRIVATE concurrentqueue)
+add_executable(spsc src/spsc.cpp)
+add_executable(mpsc src/mpsc.cpp)
+add_executable(spmc src/spmc.cpp)
+# target_link_libraries(testchannels PRIVATE concurrentqueue)
 # target_link_libraries(godbolt PRIVATE cpp_httplib)

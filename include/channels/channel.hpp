@@ -64,6 +64,16 @@ template <typename T> struct buffer {
     return _closed;
   }
 
+  bool send_wouldblock() {
+    std::unique_lock _(mu);
+    return q.size() == cap;
+  }
+
+  bool recv_wouldblock() {
+    std::unique_lock _(mu);
+    return q.empty();
+  }
+
   /**
    * @brief Closes the channel.
    *
@@ -98,7 +108,7 @@ template <typename T> struct buffer {
   T recv() {
     std::unique_lock l(mu);
     _waiting_to_receive.wait(l, [this] { return _closed || !q.empty(); });
-    if (q.finished()) {
+    if (finished()) {
       throw ChannelClosedException(
           "Attempt to receive on a closed empty channel");
     }
@@ -146,6 +156,12 @@ public:
   [[nodiscard]] size_t size() const { return buf_p->size(); }
   [[nodiscard]] bool finished() const { return buf_p->finished(); }
   [[nodiscard]] bool empty() const { return buf_p->empty(); }
+  [[nodiscard]] bool send_wouldblock() const {
+    return buf_p->send_wouldblock();
+  }
+  [[nodiscard]] bool recv_wouldblock() const {
+    return buf_p->recv_wouldblock();
+  }
 
   std::pair<send_channel<T>, recv_channel<T>> split() const {
     return std::make_pair(*this, *this);
@@ -169,12 +185,14 @@ public:
   // TODO: what is the proper way to do send?
   // do we need a T &&el as well for temporary variables?
   bool send(T el) { return buf_p->send(std::move(el)); }
-  bool send(T &&el) { return buf_p->send(std::move(el)); }
   void close() { buf_p->close(); }
   [[nodiscard]] bool closed() const { return buf_p->closed(); }
   [[nodiscard]] bool finished() const { return buf_p->finished(); }
   [[nodiscard]] size_t size() const { return buf_p->size(); }
   [[nodiscard]] bool empty() const { return buf_p->empty(); }
+  [[nodiscard]] bool wouldblock() const { return buf_p->send_wouldblock(); }
+  bool send_wouldblock() = delete;
+  bool recv_wouldblock() = delete;
 };
 
 template <typename T> class recv_channel {
@@ -191,6 +209,9 @@ public:
   [[nodiscard]] bool finished() const { return buf_p->finished(); }
   [[nodiscard]] size_t size() const { return buf_p->size(); }
   [[nodiscard]] bool empty() const { return buf_p->empty(); }
+  [[nodiscard]] bool wouldblock() const { return buf_p->recv_wouldblock(); }
+  bool send_wouldblock() = delete;
+  bool recv_wouldblock() = delete;
 };
 
 template <typename T>
